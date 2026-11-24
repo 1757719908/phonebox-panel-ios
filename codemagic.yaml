@@ -1,0 +1,45 @@
+workflows:
+  ios-unsigned-ipa:
+    name: Build unsigned IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: latest
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+    scripts:
+      - name: Install XcodeGen
+        script: brew install xcodegen
+      - name: Generate Xcode project
+        script: |
+          xcodegen generate
+          xcodebuild -list -project PhoneBoxPanel.xcodeproj
+      - name: Build unsigned
+        script: |
+          set -o pipefail
+          xcodebuild \
+            -project PhoneBoxPanel.xcodeproj \
+            -scheme PhoneBoxPanel \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tail -80
+      - name: Package IPA
+        script: |
+          set -e
+          mkdir -p out/Payload
+          cp -R build/Build/Products/Release-iphoneos/PhoneBoxPanel.app out/Payload/
+          rm -rf out/Payload/PhoneBoxPanel.app/_CodeSignature
+          rm -f out/Payload/PhoneBoxPanel.app/embedded.mobileprovision
+          cd out
+          zip -qry PhoneBoxPanel.ipa Payload
+          ls -lh PhoneBoxPanel.ipa
+    artifacts:
+      - out/PhoneBoxPanel.ipa

@@ -1,0 +1,101 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-ipa
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: "!contains(github.event.head_commit.message, 'ci-status')"
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          set -o pipefail
+          xcodegen generate 2>&1 | tee gen.log
+          xcodebuild -list -project PhoneBoxPanel.xcodeproj 2>&1 | tee -a gen.log
+
+      - name: Build (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project PhoneBoxPanel.xcodeproj \
+            -scheme PhoneBoxPanel \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log | tail -100
+
+      - name: Package unsigned IPA
+        run: |
+          set -e
+          APP_PATH="build/Build/Products/Release-iphoneos/PhoneBoxPanel.app"
+          ls -la "$APP_PATH"
+          mkdir -p out/Payload
+          cp -R "$APP_PATH" out/Payload/
+          rm -rf "out/Payload/PhoneBoxPanel.app/_CodeSignature"
+          cd out
+          zip -qry PhoneBoxPanel.ipa Payload
+          ls -lh PhoneBoxPanel.ipa
+
+      - name: Upload IPA as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhoneBoxPanel-ipa
+          path: out/PhoneBoxPanel.ipa
+          retention-days: 30
+
+      - name: Publish Release with IPA
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: PhoneBoxPanel v1.0.${{ github.run_number }}
+          body: "未签名 IPA，用 TrollStore 安装。iOS 13+ / arm64。"
+          files: out/PhoneBoxPanel.ipa
+
+  report:
+    needs: build
+    if: always() && !contains(github.event.head_commit.message, 'ci-status')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write result
+        env:
+          RESULT: ${{ needs.build.result }}
+        run: |
+          mkdir -p status
+          {
+            echo "build_result=$RESULT"
+            echo "run=${{ github.run_id }}"
+            echo "commit=${{ github.sha }}"
+          } > status/latest.txt
+          git config user.name "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          for i in 1 2 3; do
+            git fetch origin main
+            git checkout -B status-branch origin/main
+            git add status/latest.txt
+            if git commit -m "ci-status ${{ github.run_id }}"; then
+              git push origin HEAD:main && break
+            else
+              echo "nothing to commit"; break
+            fi
+            sleep 5
+          done
