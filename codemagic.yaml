@@ -31,7 +31,7 @@ workflows:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build 2>&1 | tail -80
-      - name: Package IPA
+      - name: Package unsigned IPA
         script: |
           set -e
           mkdir -p out/Payload
@@ -43,3 +43,4 @@ workflows:
           ls -lh PhoneBoxPanel.ipa
     artifacts:
       - out/PhoneBoxPanel.ipa
+      - build/build.log
